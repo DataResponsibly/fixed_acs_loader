@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fixed-acs-loader"
+name = "acsloader"
 version = "0.1.0"
 description = "Helpers for working with Folktables ACS scenarios."
 readme = "README.md"
@@ -17,4 +17,4 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["fixed-acs-loader*"]
+include = ["acsloader*"]
