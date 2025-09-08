@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fixed_acs_loader"
+version = "0.1.0"
+description = "Helpers for working with Folktables ACS scenarios."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "lurosenb" }]
+license = { text = "MIT" }
+dependencies = [
+  "pandas>=1.5",
+  "numpy>=1.23",
+  "folktables @ git+https://github.com/samgalen/folktables.git@archive_url"
+]
+
+[tool.setuptools.packages.find]
+include = ["fixed_acs_loader*"]
