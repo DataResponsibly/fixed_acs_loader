@@ -29,7 +29,7 @@ class ACSData:
     """
     Wrapper around Folktables to create pandas DataFrames.
     """
-    survey_year: Union[int, str] = 2023
+    survey_year: Union[int, str] = 2018
     horizon: str = "1-Year"
     survey: str = "person"
     states: Iterable[str] = field(default_factory=lambda: ["CA"])
