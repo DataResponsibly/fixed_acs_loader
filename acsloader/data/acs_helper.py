@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple, Union
 
+import os
 import numpy as np
 import pandas as pd
+import requests
 
 # Import your forked Folktables classes
 from folktables import (
@@ -24,6 +26,92 @@ ACS_SCENARIOS: Dict[str, object] = {
 }
 
 
+_DATAVERSE_DOI = "doi:10.7910/DVN/X36N86" 
+_PREFER_FILENAME_SUBSTR = "2018"
+
+def _dv_pick_file(files, prefer_substr = ""):
+    if prefer_substr:
+        for f in files:
+            label = f.get("label", "")
+            if prefer_substr.lower() in label.lower() and label.lower().endswith(".csv"):
+                return f
+    for f in files:
+        label = f.get("label", "")
+        ctype = (f.get("dataFile") or {}).get("contentType", "").lower()
+        if label.lower().endswith(".csv") or "text/csv" in ctype or "tabular" in ctype:
+            return f
+    return files[0] if files else None
+
+def _dv_download_csv(root_dir, year, horizon):
+    base_dir = os.path.join(root_dir, str(year), horizon)
+    os.makedirs(base_dir, exist_ok=True)
+
+    meta = requests.get(
+        "https://dataverse.harvard.edu/api/datasets/:persistentId",
+        params={"persistentId": _DATAVERSE_DOI},
+        timeout=60,
+    )
+    meta.raise_for_status()
+    files = meta.json()["data"]["latestVersion"]["files"]
+    target = _dv_pick_file(files, _PREFER_FILENAME_SUBSTR)
+    if target is None:
+        raise RuntimeError("No files found in the Dataverse dataset.")
+
+    file_id = target["dataFile"]["id"]
+    label = target["label"]
+    local_path = os.path.join(base_dir, label)
+
+    if not os.path.exists(local_path):
+        with requests.get(
+            f"https://dataverse.harvard.edu/api/access/datafile/{file_id}",
+            params={"format": "original"},
+            stream=True,
+            timeout=180,
+        ) as r:
+            r.raise_for_status()
+            with open(local_path, "wb") as fh:
+                for chunk in r.iter_content(1 << 20):
+                    fh.write(chunk)
+    return local_path
+
+def _activate_dataverse_patch() -> None:
+    import numpy as np
+    import pandas as pd
+    import folktables.load_acs as la
+
+    if getattr(la, "_orig_load_acs", None) is not None:
+        return  # already patched
+
+    la._orig_load_acs = la.load_acs  # keep original
+
+    def _patched_load_acs(root_dir, states=None, year=2018, horizon='1-Year',
+                          survey='person', density=1, random_seed=1,
+                          serial_filter_list=None, download=False, use_archive=False):
+        if os.environ.get("FOLKTABLES_USE_DATAVERSE", "1") != "1":
+            return la._orig_load_acs(root_dir, states, year, horizon, survey,
+                                     density, random_seed, serial_filter_list,
+                                     download, use_archive)
+
+        path = _dv_download_csv(root_dir, year, horizon)
+
+        dtypes = {'PINCP': np.float64, 'RT': str, 'SOCP': str, 'SERIALNO': str, 'NAICSP': str}
+        df = pd.read_csv(path, dtype=dtypes).replace(' ', '')
+
+        if serial_filter_list is not None:
+            df = df[df['SERIALNO'].isin(set(serial_filter_list))]
+
+        if serial_filter_list is None and density < 1:
+            # reservoir-like subsample without loading all rows again
+            # (simple random mask; same effect as original skiprows trick)
+            rng = np.random.default_rng(random_seed)
+            mask = rng.random(df.shape[0]) < float(density)
+            df = df.loc[mask]
+
+        return df
+
+    os.environ.setdefault("FOLKTABLES_USE_DATAVERSE", "1")
+    la.load_acs = _patched_load_acs
+
 @dataclass
 class ACSData:
     """
@@ -37,13 +125,17 @@ class ACSData:
     download: bool = True
     random_state: Optional[int] = None
 
-    # internal store of raw ACS data
+    use_dataverse: bool = False
+
     acs_data: Optional[pd.DataFrame] = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         rng = np.random.default_rng(self.random_state) if self.random_state is not None else None
-        # Keep rng around for reproducible subsamples
-        self._rng = rng
+        self._rng = rng  # keep for reproducible subsamples
+
+        # If requested, activate the Dataverse monkey-patch before constructing ACSDataSource
+        if self.use_dataverse:
+            _activate_dataverse_patch()
 
         ds = ACSDataSource(
             survey_year=self.survey_year,
